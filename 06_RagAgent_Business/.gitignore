@@ -1,0 +1,39 @@
+# 环境变量
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 日志
+output/
+*.log
+
+# 向量数据库
+chromaDB/
+
+# IDE
+.vscode/
+.idea/
+
+# 文档和生成文件
+PROJECT_SUMMARY.md
+MCP_DEEP_EXPLANATION.md
+*.pdf
+graph.png
+
+# 模拟数据集
+data/
+
+# 知识库PDF
+input/*.pdf
+
+# Claude Code 本地配置
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
