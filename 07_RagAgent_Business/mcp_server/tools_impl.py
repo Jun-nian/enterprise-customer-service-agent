@@ -50,14 +50,22 @@ def _get_embedding(text: str) -> list:
     return resp.data[0].embedding
 
 
-def retrieve(query: str) -> str:
-    """搜索企业知识库（ChromaDB），返回与查询相关的文档内容。"""
+def retrieve(query: str, n_results: int = 5) -> str:
+    """搜索企业知识库（ChromaDB），返回与查询相关的文档内容。
+
+    Args:
+        query: 查询文本
+        n_results: 返回的文档数量（top_k 策略可调大以提高召回）
+
+    Returns:
+        str: 检索到的文档拼接文本
+    """
     try:
         import chromadb
         client = chromadb.PersistentClient(path=CHROMADB_DIR)
         collection = client.get_or_create_collection(name=COLLECTION_NAME)
         emb = _get_embedding(query)
-        results = collection.query(query_embeddings=[emb], n_results=5)
+        results = collection.query(query_embeddings=[emb], n_results=n_results)
         if results and results.get("documents") and results["documents"][0]:
             docs = results["documents"][0]
             return "\n\n---\n\n".join(docs)
@@ -66,8 +74,16 @@ def retrieve(query: str) -> str:
         return f"知识库查询失败: {str(e)}"
 
 
-def search_employees(query: str) -> str:
-    """查询公司员工信息，支持按姓名、部门、职位进行搜索。"""
+def search_employees(query: str, limit: int = 5) -> str:
+    """查询公司员工信息，支持按姓名、部门、职位进行搜索。
+
+    Args:
+        query: 查询关键词
+        limit: 返回结果条数上限
+
+    Returns:
+        str: 匹配的员工信息文本
+    """
     filepath = os.path.join(DATA_DIR, "employees.json")
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -84,14 +100,22 @@ def search_employees(query: str) -> str:
                     f"邮箱: {emp['email']}, 电话: {emp['phone']}"
                 )
         if results:
-            return "\n".join(results[:5])
+            return "\n".join(results[:limit])
         return f"未找到与'{query}'匹配的员工信息"
     except Exception as e:
         return f"员工查询失败: {str(e)}"
 
 
-def search_faq(query: str) -> str:
-    """查询公司常见问题(FAQ)，涵盖入职、考勤、报销、IT支持、HR政策、行政服务、员工福利等类别。"""
+def search_faq(query: str, limit: int = 3) -> str:
+    """查询公司常见问题(FAQ)，涵盖入职、考勤、报销、IT支持、HR政策、行政服务、员工福利等类别。
+
+    Args:
+        query: 查询关键词
+        limit: 返回结果条数上限
+
+    Returns:
+        str: 匹配的FAQ文本
+    """
     filepath = os.path.join(DATA_DIR, "faq.json")
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -104,14 +128,22 @@ def search_faq(query: str) -> str:
                 or query_lower in faq.get("answer", "").lower()):
                 results.append(f"【{faq['topic']}】{faq['question']}\n回答: {faq['answer']}")
         if results:
-            return "\n\n".join(results[:3])
+            return "\n\n".join(results[:limit])
         return f"未找到与'{query}'匹配的FAQ信息"
     except Exception as e:
         return f"FAQ查询失败: {str(e)}"
 
 
-def search_orders(query: str) -> str:
-    """查询公司销售订单信息，支持按客户名称、订单编号、销售代表、订单状态进行搜索。"""
+def search_orders(query: str, limit: int = 5) -> str:
+    """查询公司销售订单信息，支持按客户名称、订单编号、销售代表、订单状态进行搜索。
+
+    Args:
+        query: 查询关键词
+        limit: 返回结果条数上限
+
+    Returns:
+        str: 匹配的订单详情文本
+    """
     filepath = os.path.join(DATA_DIR, "orders.json")
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -130,14 +162,22 @@ def search_orders(query: str) -> str:
                     f"创建日期: {order['created']}, 交付日期: {order.get('delivered', '待定')}"
                 )
         if results:
-            return "\n\n".join(results[:5])
+            return "\n\n".join(results[:limit])
         return f"未找到与'{query}'匹配的订单信息"
     except Exception as e:
         return f"订单查询失败: {str(e)}"
 
 
-def search_tickets(query: str) -> str:
-    """查询公司IT支持工单信息，支持按工单编号、标题、申请人、处理状态进行搜索。"""
+def search_tickets(query: str, limit: int = 5) -> str:
+    """查询公司IT支持工单信息，支持按工单编号、标题、申请人、处理状态进行搜索。
+
+    Args:
+        query: 查询关键词
+        limit: 返回结果条数上限
+
+    Returns:
+        str: 匹配的工单信息文本
+    """
     filepath = os.path.join(DATA_DIR, "tickets.json")
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -158,7 +198,7 @@ def search_tickets(query: str) -> str:
                     f"描述: {ticket['description']}"
                 )
         if results:
-            return "\n\n".join(results[:5])
+            return "\n\n".join(results[:limit])
         return f"未找到与'{query}'匹配的工单信息"
     except Exception as e:
         return f"工单查询失败: {str(e)}"

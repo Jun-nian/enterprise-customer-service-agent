@@ -1,5 +1,4 @@
 from langchain_chroma import Chroma
-from langchain_core.tools import create_retriever_tool
 from langchain_core.tools import tool
 from .config import Config
 
@@ -35,36 +34,45 @@ def get_tools(llm_embedding):
         collection_name=Config.CHROMADB_COLLECTION_NAME,
         embedding_function=llm_embedding,
     )
-    # 将向量存储转换为检索器
-    retriever = vectorstore.as_retriever()
-    # 创建企业知识库检索工具
-    retriever_tool = create_retriever_tool(
-        retriever,
-        name="retrieve",
-        description="这是企业知识库查询工具。搜索并返回与用户问题相关的企业知识库信息，包括公司制度、产品文档、技术方案等内容。"
-    )
+
+    # 企业知识库检索工具（手写 @tool 以支持 n_results 参数透传；create_retriever_tool 不支持）
+    @tool
+    def retrieve(query: str, n_results: int = 5) -> str:
+        """企业知识库查询工具。搜索并返回与用户问题相关的企业知识库信息，包括公司制度、产品文档、技术方案等内容。
+
+        Args:
+            query: 查询关键词
+            n_results: 返回的文档数量，默认 5，可调大以提高召回
+
+        Returns:
+            str: 检索到的相关文档内容
+        """
+        docs = vectorstore.similarity_search(query, k=n_results)
+        if not docs:
+            return "未找到相关知识库信息，请尝试使用其他关键词搜索。"
+        return "\n\n---\n\n".join(d.page_content for d in docs)
 
     # 以下工具从 mcp_server/tools_impl.py 导入核心实现，仅包装 LangChain @tool 装饰器
 
     @tool
-    def search_employees(query: str) -> str:
+    def search_employees(query: str, limit: int = 5) -> str:
         """查询公司员工信息，支持按姓名、部门、职位进行搜索。输入员工姓名、部门名称或职位关键词，返回匹配的员工信息。"""
-        return _search_employees(query)
+        return _search_employees(query, limit)
 
     @tool
-    def search_faq(query: str) -> str:
+    def search_faq(query: str, limit: int = 3) -> str:
         """查询公司常见问题(FAQ)，涵盖入职、考勤、报销、IT支持、HR政策、行政服务、员工福利等类别。输入问题关键词，返回匹配的FAQ条目。"""
-        return _search_faq(query)
+        return _search_faq(query, limit)
 
     @tool
-    def search_orders(query: str) -> str:
+    def search_orders(query: str, limit: int = 5) -> str:
         """查询公司销售订单信息，支持按客户名称、订单编号、销售代表、订单状态进行搜索。输入关键词，返回匹配的订单详情。"""
-        return _search_orders(query)
+        return _search_orders(query, limit)
 
     @tool
-    def search_tickets(query: str) -> str:
+    def search_tickets(query: str, limit: int = 5) -> str:
         """查询公司IT支持工单信息，支持按工单编号、标题、申请人、处理状态进行搜索。输入关键词，返回匹配的工单详情。"""
-        return _search_tickets(query)
+        return _search_tickets(query, limit)
 
     # 返回企业智能客服工具列表
-    return [retriever_tool, search_employees, search_faq, search_orders, search_tickets]
+    return [retrieve, search_employees, search_faq, search_orders, search_tickets]

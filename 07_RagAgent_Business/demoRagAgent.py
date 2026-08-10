@@ -71,6 +71,10 @@ handler.setFormatter(logging.Formatter(
 logger.addHandler(handler)
 
 
+# RL/搜索Agent: 全局 bandit 实例（create_graph 注入，grade_documents 回填奖励）
+_bandit = None
+
+
 # 定义消息状态类，使用TypedDict进行类型注解
 class MessagesState(TypedDict):
     # 定义messages字段，类型为消息序列，使用add_messages处理追加
@@ -79,6 +83,10 @@ class MessagesState(TypedDict):
     relevance_score: Annotated[Optional[str], "Relevance score of retrieved documents, 'yes' or 'no'"]
     # 定义rewrite_count字段，用于跟踪问题重写的次数，达到次数退出graph的递归循环
     rewrite_count: Annotated[int, "Number of times query has been rewritten"]
+    # RL/搜索Agent: 搜索尝试次数（防止 grade-no 循环）
+    search_attempts: Annotated[Optional[int], "Number of times search_agent has retried"]
+    # RL/搜索Agent: 当前轮选中的检索策略
+    selected_strategy: Annotated[Optional[str], "Strategy chosen by search_agent"]
 
 # 定义工具配置管理类，用于管理工具及其路由配置
 class ToolConfig:
@@ -433,6 +441,17 @@ def grade_documents(state: MessagesState, llm_chat) -> dict:
         score = scored_result.binary_score
         logger.info(f"Document relevance score: {score}")
 
+        # RL/搜索Agent: 评分完成后把结果作为奖励回填给 bandit（1 轮延迟在线学习）
+        if Config.ENABLE_SEARCH_AGENT:
+            try:
+                # 延迟导入避免循环依赖（rl.search_agent 依赖本模块的 create_chain）
+                from rl.search_agent import update_bandit
+                strategy = state.get("selected_strategy")
+                if strategy:
+                    update_bandit(_bandit, strategy, score)
+            except Exception as e:
+                logger.error(f"Bandit update failed: {e}")
+
         # 返回更新后的状态，包括评分结果
         return {
             # 保持消息不变
@@ -608,6 +627,13 @@ def route_after_grade(state: MessagesState) -> Literal["generate", "rewrite"]:
         logger.info("Max rewrite limit reached, proceeding to generate")
         return "generate"
 
+    # RL/搜索Agent: 相关性为 no 时，开关开启且尝试次数未达上限 → 走 search_agent 换策略重试
+    if Config.ENABLE_SEARCH_AGENT:
+        search_attempts = state.get("search_attempts", 0)
+        if isinstance(relevance_score, str) and relevance_score.lower() == "no" and search_attempts < 2:
+            logger.info(f"Routing to search_agent (attempt {search_attempts + 1}/2)")
+            return "search_agent"
+
     try:
         # 检查 relevance_score 是否为有效字符串，若不是则视为无效评分
         if not isinstance(relevance_score, str):
@@ -689,6 +715,18 @@ def create_graph(llm_chat, llm_embedding, tool_config: ToolConfig) -> StateGraph
     # 添加文档相关性评分节点
     workflow.add_node("grade_documents", lambda state: grade_documents(state, llm_chat=llm_chat))
 
+    # RL/搜索Agent: 开关开启时注入 search_agent 节点（bandit 选策略 → call_tools 执行）
+    if Config.ENABLE_SEARCH_AGENT:
+        from rl.bandit import load_bandit
+        from rl.search_agent import search_agent
+        global _bandit
+        _bandit = load_bandit(Config.BANDIT_STATE_FILE)
+        workflow.add_node(
+            "search_agent",
+            lambda state: search_agent(state, llm_chat=llm_chat, tool_config=tool_config, bandit=_bandit),
+        )
+        workflow.add_edge(start_key="search_agent", end_key="call_tools")
+
     # 添加从起始到代理的边
     workflow.add_edge(START, end_key="agent")
     # 添加代理的条件边，根据工具调用的工具名称决定下一步路由
@@ -696,7 +734,11 @@ def create_graph(llm_chat, llm_embedding, tool_config: ToolConfig) -> StateGraph
     # 添加检索的条件边，根据工具调用的结果动态决定下一步路由
     workflow.add_conditional_edges(source="call_tools", path=lambda state: route_after_tools(state, tool_config),path_map={"generate": "generate", "grade_documents": "grade_documents"})
     # 添加检索的条件边，根据状态中的评分结果决定下一步路由
-    workflow.add_conditional_edges(source="grade_documents", path=route_after_grade, path_map={"generate": "generate", "rewrite": "rewrite"})
+    if Config.ENABLE_SEARCH_AGENT:
+        workflow.add_conditional_edges(source="grade_documents", path=route_after_grade,
+                                       path_map={"generate": "generate", "rewrite": "rewrite", "search_agent": "search_agent"})
+    else:
+        workflow.add_conditional_edges(source="grade_documents", path=route_after_grade, path_map={"generate": "generate", "rewrite": "rewrite"})
     # 添加从生成到结束的边
     workflow.add_edge(start_key="generate", end_key=END)
     # 添加从重写到代理的边
