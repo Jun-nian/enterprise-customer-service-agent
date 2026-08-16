@@ -114,6 +114,7 @@ LangGraphChatBot/
 ├── 05_RagAgent_Business/        # ⑤ 企业客服版（本地 Ollama）
 ├── 06_RagAgent_Business/        # ⑥ 企业客服版（环境变量配置，公开版）
 ├── 07_RagAgent_Business/        # ⑦ 企业客服版（.env 配置 + RL + 评测）
+├── 08_RagAgent_Business/        # ⑧ 企业客服版（规划范式 + 安全护栏 + 评测基准 + 多Agent）
 │   ├── main.py                  # FastAPI 服务入口
 │   ├── demoRagAgent.py          # LangGraph 工作流引擎
 │   ├── webUI.py                 # Gradio 聊天界面
@@ -256,7 +257,7 @@ python demoRagAgent.py
 
 > **05 vs 06 区别**：05 是本地 Ollama 版（配置硬编码）；06 是公开版（配置改由环境变量读取），两者核心代码相同。
 
-### 版本 ⑦ 企业智能客服 + RL（07_RagAgent_Business，最新）
+### 版本 ⑦ 企业智能客服 + RL（07_RagAgent_Business）
 
 ```bash
 cd 07_RagAgent_Business
@@ -278,6 +279,32 @@ python eval_rag.py --strategy auto       # RL bandit 在线学习评测
 ```
 
 > 💡 07 版新增的 `ENABLE_SEARCH_AGENT` 开关默认关闭，开启后图结构才会注入 RL 搜索节点，不影响原有行为。
+
+### 版本 ⑧ 企业智能客服 + 规划 + 护栏（08_RagAgent_Business，最新）
+
+```bash
+cd 08_RagAgent_Business
+
+# 1. 配置 .env（含 08 新增能力开关）
+cp .env.example .env
+
+# 2. 启动 API + Web 服务
+python main.py
+python webUI.py
+
+# 3. 能力开关（可选，按需开启）
+#    ENABLE_PLANNING=true    # 规划范式（Planner/Executor/Critic）
+#    ENABLE_GUARDRAILS=true  # 安全护栏（7类攻击检测 + PII脱敏）
+#    ENABLE_RELIABILITY=true # 工具可靠性（超时/重试/熔断）
+
+# 4. 评测
+python eval_rag.py --agent-eval            # Agent 行为层评测
+python eval_rag.py --agent-eval --compare  # 多策略基准对比（default vs plan-execute）
+python eval_attack.py                      # 输入护栏攻击测试集评测
+python evals/memory_eval.py                # 记忆检索质量评估
+```
+
+> 💡 08 版所有新增能力默认关闭，开启后仍保留简单查询快路径，不影响 07 既有行为。
 
 ---
 
@@ -401,7 +428,79 @@ python eval_rag.py --cases search_faq  # 只评测 FAQ 用例
 | ④ | `04_RagAgent` | + RAG 知识检索 + 工具调用 + 动态路由 | ✅ 完整 |
 | ⑤ | `05_RagAgent_Business` | 企业客服版（本地 Ollama） | ✅ 完整 |
 | ⑥ | `06_RagAgent_Business` | 企业客服版（环境变量配置） | ✅ 完整 |
-| ⑦ | `07_RagAgent_Business` | + RL 检索优化 + 评测体系（最新） | ✅ 最新 |
+| ⑦ | `07_RagAgent_Business` | + RL 检索优化 + 评测体系 | ✅ 完整 |
+| ⑧ | `08_RagAgent_Business` | + 规划范式 + 安全护栏 + 评测基准 + 多Agent（最新） | ✅ 最新 |
+
+---
+
+## 🛡️ 08 版亮点（08_RagAgent_Business）
+
+08 版在 07 基础上升级为 **面试有竞争力的 Agent 作品**，新增四大能力：
+
+### 1. 🧠 显式规划范式（P0-A）
+
+将固定 5 节点 DAG 升级为 **Plan-and-Execute + 动态重规划**：
+
+```
+用户请求 → planner（复杂度判定）
+  ├─ 简单查询 → agent（快路径，零额外成本）
+  └─ 复杂查询 → executor（逐步执行）→ critic（评估）
+                 ↑                        │
+                 └── 失败重规划（≤2次） ←─┘
+```
+
+- `planning/planner.py`：结构化输出多步计划 + 规则预判复杂度
+- `planning/executor.py`：按计划逐步调用工具，观察回填
+- `planning/critic.py`：评估结果，决定继续/完成/重规划
+
+### 2. 🛡️ 安全护栏层（P0-C）
+
+复用 **vivo 7 类提示词攻击范式**（越狱/指令注入/角色扮演/数据窃取/混淆规避/有害内容/拒绝服务）：
+
+- 输入侧：`guardrails/input_guard.py` 攻击检测，命中即拒答
+- 输出侧：`guardrails/output_guard.py` PII 脱敏（手机号/邮箱/身份证）
+- 越权校验：`guardrails/authz.py` 敏感工具角色鉴权
+- 审计日志：`guardrails/audit.py` 脱敏记录，不落全量敏感数据
+
+**攻击测试集实测：召回率 100%、误报率 0%**（`eval_attack.py`）
+
+### 3. 📊 Agent 行为层评测基准（P0-B）
+
+在 hit@k 之上补齐 Agent 行为层指标：
+
+| 指标 | 说明 |
+|------|------|
+| 任务成功率 | LLM-judge 判定回答覆盖金标准 |
+| 工具调用准确率 | 期望工具是否被正确调用 |
+| 多步完成率 | complex 用例多步执行完成比例 |
+| 无效 LLM 调用率 | 未调用工具却空转回答 |
+| 步数/延迟/Token | 成本指标（可观测层） |
+
+5 类评测集（单工具/多工具/跨源/无解/对抗）+ 多策略基准对比表导出。
+
+### 4. 🔌 多智能体协作（P1-C）
+
+`multiagent/roles.py`：Planner/Executor/Critic 角色化 + 领域子 Agent 路由
+（HR/IT/业务/知识库），各子 Agent 持有独立工具子集。
+
+### 5. ⚙️ 工具可靠性（P1-B）
+
+`reliability/tool_wrapper.py`：超时 / 指数退避重试 / 失败降级 / 熔断器。
+
+### 开启方式（全部默认关闭，兼容 07 行为）
+
+```bash
+# 在 08_RagAgent_Business/.env 中配置
+ENABLE_PLANNING=true        # 规划范式
+ENABLE_GUARDRAILS=true      # 安全护栏
+ENABLE_RELIABILITY=true     # 工具可靠性
+
+# 评测
+python eval_rag.py --agent-eval           # Agent 行为层评测
+python eval_rag.py --agent-eval --compare # 多策略基准对比
+python eval_attack.py                     # 攻击护栏评测
+python evals/memory_eval.py               # 记忆检索质量评估
+```
 
 ---
 
